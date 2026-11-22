@@ -1,4 +1,10 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import org.gradle.api.file.Directory
+import org.gradle.api.provider.Provider
+import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.process.CommandLineArgumentProvider
 
 plugins {
   alias(libs.plugins.android.application)
@@ -63,7 +69,17 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all { test ->
+        test.dependsOn("syncRobolectricDeps")
+        test.jvmArgumentProviders.add(
+          RobolectricDepsArgumentProvider(layout.buildDirectory.dir("robolectric-deps"))
+        )
+      }
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
@@ -149,4 +165,31 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   // "ksp"(libs.androidx.room.compiler)
   // "ksp"(libs.moshi.kotlin.codegen)
+}
+
+class RobolectricDepsArgumentProvider(
+  @get:InputDirectory
+  @get:PathSensitive(PathSensitivity.RELATIVE)
+  val depsDir: Provider<Directory>,
+) : CommandLineArgumentProvider {
+  override fun asArguments(): Iterable<String> =
+    listOf(
+      "-Drobolectric.offline=true",
+      "-Drobolectric.dependency.dir=${depsDir.get().asFile.absolutePath}",
+    )
+}
+
+val robolectricSdk by configurations.creating {
+  isCanBeConsumed = false
+  isCanBeResolved = true
+  isTransitive = false
+}
+
+dependencies {
+  robolectricSdk("org.robolectric:android-all-instrumented:16-robolectric-13921718-i7")
+}
+
+tasks.register<Sync>("syncRobolectricDeps") {
+  from(robolectricSdk)
+  into(layout.buildDirectory.dir("robolectric-deps"))
 }
