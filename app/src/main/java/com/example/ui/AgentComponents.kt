@@ -1224,12 +1224,12 @@ fun CarromWatchTrainCard(
                 color = TextSecondary
             )
 
-            val totalAttempts = carromMemory.statsByBucket.values.sumOf { it.attempts }
-            val totalPots = carromMemory.statsByBucket.values.sumOf { it.successes }
+            val totalAttempts = carromMemory.totalLearnedAttempts()
+            val totalPots = carromMemory.totalLearnedPots()
             val blockedFouls = carromMemory.blockedFoulCount()
             val cleanPatternsCount = carromMemory.cleanShotPatterns.size
             val collisionRiskCount = carromMemory.collisionRisks.count { it.riskScore() > 0.1f }
-            if (totalAttempts > 0 || carromMemory.matchCalibration.shotsThisMatch > 0 || blockedFouls > 0 || cleanPatternsCount > 0) {
+            if (totalAttempts > 0 || blockedFouls > 0 || cleanPatternsCount > 0 || carromMemory.selfPlayShotsSimulated > 0) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Box(
                     modifier = Modifier
@@ -1241,7 +1241,7 @@ fun CarromWatchTrainCard(
                     Text(
                         text = "Learned: %d shots (%d pots) • Patterns: %d • Collision Risks: %d • Fouls: %d • Power %.2fx".format(
                             Locale.US,
-                            maxOf(totalAttempts, carromMemory.matchCalibration.shotsThisMatch),
+                            totalAttempts,
                             totalPots,
                             cleanPatternsCount,
                             collisionRiskCount,

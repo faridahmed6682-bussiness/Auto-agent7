@@ -221,11 +221,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                     stream.flush()
                 } ?: error("Unable to open destination file.")
                 val mem = carromMemory.value
-                val shots = maxOf(
-                    mem.statsByBucket.values.sumOf { it.attempts },
-                    mem.matchCalibration.shotsThisMatch
-                )
-                "Exported $shots shots & ${mem.blockedFoulCount()} blocked fouls (GitHub-ready JSON)!"
+                val shots = mem.totalLearnedAttempts()
+                "Exported $shots shots (${mem.totalLearnedPots()} pots) & ${mem.blockedFoulCount()} blocked fouls (GitHub-ready JSON)!"
             }
             _carromTransferStatus.value = result.getOrElse { err ->
                 "Export failed: ${err.localizedMessage ?: "unknown error"}"

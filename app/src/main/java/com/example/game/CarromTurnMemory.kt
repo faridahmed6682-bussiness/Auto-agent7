@@ -170,6 +170,14 @@ class CarromTurnMemory {
         ensureTurnStarted(nowMs)
         if (_sliderMovesThisTurn >= MAX_BASELINE_PROBES) return false
         val elapsed = elapsedMs(nowMs)
+        if (_sliderMovesThisTurn == 0) {
+            if (elapsed >= 3_650L) return false
+            val firstReserve = maxOf(
+                if (isLiveStreamActive) 850L else 1_050L,
+                (lastCycleDurationMs + 250L).coerceAtMost(2_100L)
+            )
+            return remainingMs(nowMs) > firstReserve
+        }
         if (elapsed >= FALLBACK_FIRE_ELAPSED_MS) return false
         val baseReserve = if (isLiveStreamActive) LIVE_FIRE_RESERVE_MS else A11Y_FIRE_RESERVE_MS
         val reserve = maxOf(baseReserve, lastCycleDurationMs + 400L)
@@ -222,6 +230,14 @@ class CarromTurnMemory {
         }
     }
 
+    fun isSpotVisitedOrRejected(
+        strikerX: Float,
+        tolerancePx: Float = SPOT_MATCH_TOLERANCE_PX
+    ): Boolean {
+        return rejectedSpots.any { abs(it.first - strikerX) <= tolerancePx } ||
+            visitedStrikerXs.any { abs(it - strikerX) <= tolerancePx }
+    }
+
     fun nextUntestedProbeSpot(
         currentStrikerX: Float?,
         tolerancePx: Float = SPOT_MATCH_TOLERANCE_PX
@@ -229,9 +245,7 @@ class CarromTurnMemory {
         if (_sliderMovesThisTurn >= MAX_BASELINE_PROBES) return null
         for (spot in rankedProbeQueue) {
             val nearCurrent = currentStrikerX != null && abs(spot.strikerX - currentStrikerX) <= tolerancePx
-            val alreadyRejected = rejectedSpots.any { abs(it.first - spot.strikerX) <= tolerancePx }
-            val alreadyVisited = visitedStrikerXs.any { abs(it - spot.strikerX) <= tolerancePx }
-            if (!nearCurrent && !alreadyRejected && !alreadyVisited) {
+            if (!nearCurrent && !isSpotVisitedOrRejected(spot.strikerX, tolerancePx)) {
                 return spot
             }
         }
@@ -456,7 +470,8 @@ class CarromTurnMemory {
         }
         if (bestRemembered != null) return bestRemembered
         if (fallbackSolution != null && fallbackSolution.isSureShot &&
-            !fallbackSolution.rejectedDueToCollisionOrFoul
+            !fallbackSolution.rejectedDueToCollisionOrFoul &&
+            abs(fallbackSolution.strikerPos.x - anchorStriker.center.x) <= board.strikerRadiusPx * 1.6f
         ) {
             return fallbackSolution
         }

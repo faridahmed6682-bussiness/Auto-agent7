@@ -2,6 +2,7 @@ package com.example.game
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -378,6 +379,17 @@ data class CarromMemoryData(
         return merged.values
     }
 
+    fun totalLearnedAttempts(): Int {
+        val bucketAttempts = statsByBucket.values.sumOf { it.attempts } +
+            profileStats.values.sumOf { pMap -> pMap.values.sumOf { it.attempts } }
+        return maxOf(bucketAttempts, matchCalibration.shotsThisMatch)
+    }
+
+    fun totalLearnedPots(): Int {
+        return statsByBucket.values.sumOf { it.successes } +
+            profileStats.values.sumOf { pMap -> pMap.values.sumOf { it.successes } }
+    }
+
     fun learnedPowerScaleFor(pocketIndex: Int, cutAngleDeg: Float, distRatio: Float = 0.7f): Float {
         val exact = statsFor(pocketIndex, cutAngleDeg, distRatio)
         if (exact != null && exact.attempts > 0) return exact.learnedPowerScale
@@ -584,17 +596,18 @@ data class CarromMemoryData(
     }
 
     fun formatForPrompt(): String {
-        if (statsByBucket.isEmpty() && foulSignatures.isEmpty() && recentTactics.isEmpty() && recentFouls.isEmpty()) {
+        val activeStats = mergedStatsValues()
+        if (activeStats.isEmpty() && foulSignatures.isEmpty() && recentTactics.isEmpty() && recentFouls.isEmpty()) {
             return ""
         }
-        val bestBuckets = statsByBucket.values
+        val bestBuckets = activeStats
             .filter { it.successes > 0 }
             .sortedByDescending { it.successes - it.fouls }
             .take(4)
             .joinToString("\n") { st ->
                 "- ${pocketName(st.pocketIndex)} | ${st.angleBucket.label}: ${st.successes}/${st.attempts} potted, powerScale=${String.format(Locale.US, "%.2f", st.learnedPowerScale)}"
             }
-        val foulBuckets = statsByBucket.values
+        val foulBuckets = activeStats
             .filter { it.fouls > 0 }
             .sortedByDescending { it.fouls }
             .take(4)
@@ -772,21 +785,38 @@ data class CarromEvaluationResult(
 class CarromShotMemoryStore(context: Context) {
 
     private val storageFile = File(context.filesDir, CARROM_MEMORY_FILE)
+    private val backupFile = File(context.filesDir, "$CARROM_MEMORY_FILE.bak")
+    private val tempFile = File(context.filesDir, "$CARROM_MEMORY_FILE.tmp")
     private val mutex = Mutex()
+    @Volatile
+    private var hasLoadedFromDisk = false
 
     private val _memory = MutableStateFlow(CarromMemoryData())
     val memory: StateFlow<CarromMemoryData> = _memory.asStateFlow()
 
     suspend fun loadInitial() {
         mutex.withLock {
-            val loaded = withContext(Dispatchers.IO) {
-                runCatching {
-                    if (!storageFile.exists()) CarromMemoryData()
-                    else parseJson(storageFile.readText())
-                }.getOrDefault(CarromMemoryData())
-            }
-            _memory.value = loaded
+            loadFromDiskLocked(forceReload = true)
         }
+    }
+
+    private suspend fun ensureLoadedLocked() {
+        if (!hasLoadedFromDisk) {
+            loadFromDiskLocked(forceReload = false)
+        }
+    }
+
+    private suspend fun loadFromDiskLocked(forceReload: Boolean) {
+        if (hasLoadedFromDisk && !forceReload) return
+        val loaded = withContext(NonCancellable + Dispatchers.IO) {
+            fun tryRead(file: File): CarromMemoryData? {
+                if (!file.exists() || file.length() == 0L) return null
+                return runCatching { parseJson(file.readText()) }.getOrNull()
+            }
+            tryRead(storageFile) ?: tryRead(backupFile) ?: CarromMemoryData()
+        }
+        _memory.value = loaded
+        hasLoadedFromDisk = true
     }
 
     suspend fun recordShotOutcome(
@@ -796,6 +826,7 @@ class CarromShotMemoryStore(context: Context) {
         missCauseInput: MissCauseInput? = null
     ): CarromEvaluationResult {
         return mutex.withLock {
+            ensureLoadedLocked()
             val evaluated = evaluateShotOutcome(
                 current = _memory.value,
                 pendingShot = pendingShot,
@@ -825,6 +856,7 @@ class CarromShotMemoryStore(context: Context) {
         isOpponentSide: Boolean = false
     ): CarromEvaluationResult {
         return mutex.withLock {
+            ensureLoadedLocked()
             val evaluated = evaluateShotOutcome(
                 current = _memory.value,
                 pendingShot = pendingShot,
@@ -864,6 +896,7 @@ class CarromShotMemoryStore(context: Context) {
     suspend fun updateSliderGain(observedRatio: Float) {
         val clamped = observedRatio.coerceIn(0.65f, 1.45f)
         mutex.withLock {
+            ensureLoadedLocked()
             val cur = _memory.value
             val prevCal = cur.matchCalibration
             val n = prevCal.sliderSamples
@@ -881,6 +914,7 @@ class CarromShotMemoryStore(context: Context) {
 
     suspend fun updateBoardCalibration(profile: BoardCalibrationProfile) {
         mutex.withLock {
+            ensureLoadedLocked()
             val cur = _memory.value
             persistLocked(
                 cur.copy(
@@ -904,6 +938,7 @@ class CarromShotMemoryStore(context: Context) {
      */
     suspend fun resetMatchCalibration() {
         mutex.withLock {
+            ensureLoadedLocked()
             val cur = _memory.value
             persistLocked(
                 cur.copy(
@@ -925,6 +960,7 @@ class CarromShotMemoryStore(context: Context) {
         val name = profile.profileName.takeIf { it.isNotBlank() } ?: "Default"
         val named = profile.copy(profileName = name, enabled = true)
         mutex.withLock {
+            ensureLoadedLocked()
             val cur = _memory.value
             val updatedProfiles = cur.boardProfiles
                 .filterNot { it.profileName == name }
@@ -950,6 +986,7 @@ class CarromShotMemoryStore(context: Context) {
      */
     suspend fun activateBoardProfile(profileName: String): Boolean {
         return mutex.withLock {
+            ensureLoadedLocked()
             val cur = _memory.value
             val profile = cur.boardProfiles.firstOrNull { it.profileName == profileName }
                 ?: return@withLock false
@@ -989,6 +1026,7 @@ class CarromShotMemoryStore(context: Context) {
             // ~2s of background CPU; live recording serialises behind it
             // but no record is ever lost.
             mutex.withLock {
+                ensureLoadedLocked()
                 val report = withContext(Dispatchers.Default) {
                     CarromSelfPlayTrainer.runSweep(
                         memory = _memory.value,
@@ -1005,21 +1043,32 @@ class CarromShotMemoryStore(context: Context) {
 
     suspend fun clearAll() {
         mutex.withLock {
+            hasLoadedFromDisk = true
             persistLocked(CarromMemoryData())
         }
     }
 
     suspend fun replaceWithImported(memoryData: CarromMemoryData) {
         mutex.withLock {
+            hasLoadedFromDisk = true
             persistLocked(memoryData)
         }
     }
 
     private suspend fun persistLocked(data: CarromMemoryData) {
+        hasLoadedFromDisk = true
         _memory.value = data
-        withContext(Dispatchers.IO) {
+        withContext(NonCancellable + Dispatchers.IO) {
             runCatching {
-                storageFile.writeText(serializeJson(data))
+                val json = serializeJson(data)
+                if (storageFile.exists() && storageFile.length() > 0L) {
+                    runCatching { storageFile.copyTo(backupFile, overwrite = true) }
+                }
+                tempFile.writeText(json)
+                if (!tempFile.renameTo(storageFile)) {
+                    storageFile.writeText(json)
+                    tempFile.delete()
+                }
             }
         }
     }
@@ -2013,11 +2062,8 @@ class CarromShotMemoryStore(context: Context) {
             carromPlaybook: TaskPlaybook?,
             exportedAtMs: Long = System.currentTimeMillis()
         ): String {
-            val totalAttempts = maxOf(
-                memory.statsByBucket.values.sumOf { it.attempts },
-                memory.matchCalibration.shotsThisMatch
-            )
-            val totalPots = memory.statsByBucket.values.sumOf { it.successes }
+            val totalAttempts = memory.totalLearnedAttempts()
+            val totalPots = memory.totalLearnedPots()
             val blockedFouls = memory.blockedFoulCount()
 
             val root = JSONObject()

@@ -256,11 +256,8 @@ object AgentCoordinator {
             if (importedPb != null) {
                 knowledgeStore?.saveOrMergePlaybook(importedPb)
             }
-            val totalShots = maxOf(
-                importedMem.statsByBucket.values.sumOf { it.attempts },
-                importedMem.matchCalibration.shotsThisMatch
-            )
-            val totalPots = importedMem.statsByBucket.values.sumOf { it.successes }
+            val totalShots = importedMem.totalLearnedAttempts()
+            val totalPots = importedMem.totalLearnedPots()
             val blockedFouls = importedMem.blockedFoulCount()
             "Imported $totalShots shots ($totalPots pots, $blockedFouls blocked fouls)!"
         }
@@ -1834,18 +1831,29 @@ object AgentCoordinator {
         val striker = outcome.detectedStriker
         val calProfile = currentCarromMem.boardCalibration.takeIf { it.enabled }
         val sliderKnob = outcome.detectedSliderKnob ?: run {
-            if (striker != null && calProfile != null) {
-                val sliderLeftPx = calProfile.sliderTrackLeftNorm * obs.snapshot.screenWidth
-                val sliderRightPx = calProfile.sliderTrackRightNorm * obs.snapshot.screenWidth
-                val sliderY = calProfile.sliderTrackYNorm * obs.snapshot.screenHeight
+            if (striker != null) {
                 val strikerMargin = outcome.board.strikerRadiusPx * 2.1f
                 val playableSpan = (outcome.board.width - strikerMargin * 2f).coerceAtLeast(40f)
                 val strikerNorm = ((striker.center.x - (outcome.board.left + strikerMargin)) / playableSpan)
                     .coerceIn(0f, 1f)
-                com.example.game.Point2D(
-                    sliderLeftPx + strikerNorm * (sliderRightPx - sliderLeftPx),
-                    sliderY
-                )
+                if (calProfile != null) {
+                    val sliderLeftPx = calProfile.sliderTrackLeftNorm * obs.snapshot.screenWidth
+                    val sliderRightPx = calProfile.sliderTrackRightNorm * obs.snapshot.screenWidth
+                    val sliderY = calProfile.sliderTrackYNorm * obs.snapshot.screenHeight
+                    com.example.game.Point2D(
+                        sliderLeftPx + strikerNorm * (sliderRightPx - sliderLeftPx),
+                        sliderY
+                    )
+                } else {
+                    val estLeftPx = outcome.board.left + outcome.board.width * 0.16f
+                    val estRightPx = outcome.board.right - outcome.board.width * 0.16f
+                    val estSliderY = (outcome.board.bottom + outcome.board.height * 0.125f)
+                        .coerceAtMost((obs.snapshot.screenHeight - 48f).coerceAtLeast(outcome.board.bottom + 24f))
+                    com.example.game.Point2D(
+                        estLeftPx + strikerNorm * (estRightPx - estLeftPx),
+                        estSliderY
+                    )
+                }
             } else {
                 null
             }
@@ -2006,11 +2014,20 @@ object AgentCoordinator {
             }
             state.carromTurnMemory.markSpotRejected(striker.center.x, rejectWhy)
             if (canAffordSlide) {
-                // Sweep first: the first striker
-                // position that pots with sure
-                // confidence wins; otherwise the
-                // next untested probe spot.
+                // Prefer verified sweep spot first, else the full-baseline
+                // solver's winning strikerPos.x if not yet tried, else the
+                // next ranked untested probe spot.
+                val solvedTargetX = outcome.solution
+                    ?.takeIf { sol ->
+                        !sol.isSafetyShot &&
+                            !sol.rejectedDueToCollisionOrFoul &&
+                            (sol.isSureShot || sol.confidenceScore >= 0.45f) &&
+                            kotlin.math.abs(sol.strikerPos.x - striker.center.x) > minCorrectionPx &&
+                            !state.carromTurnMemory.isSpotVisitedOrRejected(sol.strikerPos.x)
+                    }
+                    ?.strikerPos?.x
                 nextProbeTargetX = sweepFirstPotsX
+                    ?: solvedTargetX
                     ?: state.carromTurnMemory.nextUntestedProbeSpot(striker.center.x)?.strikerX
                 if (nextProbeTargetX == null) {
                     val returnX = state.carromTurnMemory.bestEvaluatedSpotToReturnTo(
@@ -2041,9 +2058,19 @@ object AgentCoordinator {
                 state.carromTurnMemory.markReturnedToBestSpot()
             }
             val rawDelta = slideTargetX - striker.center.x
+            val trackScale = if (calProfile != null &&
+                calProfile.sliderTrackRightNorm > calProfile.sliderTrackLeftNorm + 0.1f
+            ) {
+                val calSliderSpan = (calProfile.sliderTrackRightNorm - calProfile.sliderTrackLeftNorm) * obs.snapshot.screenWidth
+                val strikerMargin = outcome.board.strikerRadiusPx * 2.1f
+                val baselineSpan = (outcome.board.width - strikerMargin * 2f).coerceAtLeast(40f)
+                (calSliderSpan / baselineSpan).coerceIn(0.45f, 1.25f)
+            } else {
+                0.85f
+            }
             val maxSliderDelta = (outcome.board.width * 0.72f)
                 .coerceIn(380f, (obs.snapshot.screenWidth * 0.85f).coerceAtLeast(380f))
-            val calibratedDelta = (rawDelta / turnGain).coerceIn(-maxSliderDelta, maxSliderDelta)
+            val calibratedDelta = ((rawDelta * trackScale) / turnGain).coerceIn(-maxSliderDelta, maxSliderDelta)
             val targetKnobEndX = (sliderKnob.x + calibratedDelta)
                 .toInt()
                 .coerceIn(28, (obs.snapshot.screenWidth - 28).coerceAtLeast(29))
@@ -2078,10 +2105,10 @@ object AgentCoordinator {
                 y = sliderKnob.y.toInt(),
                 endX = targetKnobEndX,
                 endY = sliderKnob.y.toInt(),
-                // Human-like timing: vary the slide duration slightly
-                // so the probe does not move like a metronome.
-                durationMs = (if (kotlin.math.abs(calibratedDelta) < 120f) 210L else 280L) +
-                    Random.Default.nextLong(-25L, 26L),
+                // Human-like timing with reliable slider lock-on (avoid
+                // ultra-fast flicks that the game treats as a tap).
+                durationMs = (if (kotlin.math.abs(calibratedDelta) < 120f) 260L else 330L) +
+                    Random.Default.nextLong(-20L, 26L),
                 textToType = null,
                 waitSeconds = null,
                 memoryNote = "Turn Memory (${state.carromTurnMemory.scanCount} scans, ${state.carromTurnMemory.rejectedProbeCount} rejected, rem=${String.format(java.util.Locale.US, "%.1f", remSec)}s): probing spot #${state.carromTurnMemory.sliderMovesThisTurn}/${CarromTurnMemory.MAX_BASELINE_PROBES}",
@@ -2177,7 +2204,11 @@ object AgentCoordinator {
                 isFreestyle = analysis.isFreestyleMode,
                 queenPendingCover = state.queenPendingCover,
                 difficulty = obs.settings.carromDifficulty
-            ) ?: outcome.solution.takeIf { it.isSureShot }
+            ) ?: outcome.solution.takeIf {
+                it.isSureShot &&
+                    (probe.striker == null ||
+                        kotlin.math.abs(it.strikerPos.x - probe.striker.center.x) <= outcome.board.strikerRadiusPx * 1.6f)
+            }
                 ?: CarromGeometrySolver.solveSafetyShot(
                     board = outcome.board,
                     pieces = outcome.boardPieces,
