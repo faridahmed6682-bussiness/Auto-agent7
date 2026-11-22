@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TapPilot Unified Connector Hub</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="container">
+    <header class="top-bar card">
+      <div>
+        <h1>Unified Connector Hub</h1>
+        <p class="subtitle">One-click connect Google Workspace, WhatsApp, and automation tools for your AI Agent.</p>
+      </div>
+      <div class="user-row">
+        <label for="userIdInput">User ID</label>
+        <input id="userIdInput" type="text" value="tappilot_main" autocomplete="off" />
+        <button id="refreshHubBtn" type="button" class="btn-outline">Refresh</button>
+      </div>
+    </header>
+
+    <section class="card">
+      <div class="section-head">
+        <h2>Active AI Agent Tools (<code>getUserTools</code>)</h2>
+        <span id="toolsCountBadge" class="badge badge-disconnected">0 Active</span>
+      </div>
+      <div id="activeToolsChips" class="chip-row"></div>
+    </section>
+
+    <p id="feedbackText" class="feedback" hidden></p>
+
+    <div class="grid">
+      <!-- 1. Google Workspace Connector Card -->
+      <section class="card">
+        <div class="header">
+          <div>
+            <h2>Google (Gmail + Calendar + Drive)</h2>
+            <p id="googleMetaText" class="subtitle">OAuth 2.0 single sign-in with Gmail, Calendar &amp; Drive scopes</p>
+          </div>
+          <span id="googleBadge" class="badge badge-disconnected">Disconnected</span>
+        </div>
+
+        <div class="rule-row">
+          <span>Gmail Auto-Reply / Draft</span>
+          <label class="switch">
+            <input id="gmailAutoToggle" type="checkbox" />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="btn-row">
+          <button id="connectGoogleBtn" type="button" class="btn-primary">Connect Google</button>
+          <button id="runGmailAutoBtn" type="button" class="btn-secondary" hidden>Run Gmail AI Drafts</button>
+          <button id="disconnectGoogleBtn" type="button" class="btn-danger" hidden>Disconnect</button>
+        </div>
+      </section>
+
+      <!-- 2. WhatsApp Pairing Connector Card -->
+      <section class="card">
+        <div class="header">
+          <div>
+            <h2>WhatsApp (Baileys Pairing)</h2>
+            <p id="waMetaText" class="subtitle">8-digit pairing code link for 24/7 AI Auto-Reply</p>
+          </div>
+          <span id="statusBadge" class="badge badge-disconnected">Disconnected</span>
+        </div>
+
+        <div class="rule-row">
+          <span>WhatsApp AI Auto-Reply</span>
+          <label class="switch">
+            <input id="waAutoToggle" type="checkbox" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <form id="pairForm" class="form">
+          <label for="phoneInput">WhatsApp Phone Number (Country Code, no +)</label>
+          <input id="phoneInput" type="tel" placeholder="88017XXXXXXXX" inputmode="numeric" required />
+          <button id="pairBtn" type="submit" class="btn-primary">Connect WhatsApp / Get Pairing Code</button>
+        </form>
+
+        <div id="codeSection" class="code-box" hidden>
+          <div class="code-label">8-Digit WhatsApp Pairing Code</div>
+          <div id="pairingCodeValue" class="pairing-code">--------</div>
+          <button id="copyBtn" type="button" class="btn-secondary">Copy Code</button>
+          <ol class="guide-list">
+            <li>কোডটি কপি করুন।</li>
+            <li>ফোনের WhatsApp খুলে Linked Devices &gt; Link a Device চাপুন।</li>
+            <li>নিচে "Link with phone number instead" চেপে কোডটি পেস্ট করুন।</li>
+          </ol>
+        </div>
+
+        <div id="connectedBox" class="connected-box" hidden>
+          <div class="connected-title">Connected ✅</div>
+          <p id="connectedDetail" class="connected-detail"></p>
+          <button id="disconnectBtn" type="button" class="btn-danger">Disconnect WhatsApp</button>
+        </div>
+      </section>
+
+      <!-- 3. Custom Tools (Telegram / Webhook) Card -->
+      <section class="card">
+        <div class="header">
+          <div>
+            <h2>Other Tools (Telegram / Webhook)</h2>
+            <p id="customMetaText" class="subtitle">Connect a Telegram Bot Token or HTTPS Webhook URL</p>
+          </div>
+          <span id="customBadge" class="badge badge-disconnected">Disconnected</span>
+        </div>
+
+        <form id="customToolForm" class="form">
+          <select id="customProviderSelect">
+            <option value="telegram">Telegram Bot</option>
+            <option value="webhook">HTTPS Webhook</option>
+          </select>
+          <input id="customCredInput" type="password" placeholder="Paste Bot Token or https://..." required />
+          <button id="saveCustomBtn" type="submit" class="btn-primary">Save &amp; Connect</button>
+        </form>
+      </section>
+    </div>
+
+    <!-- 4. Smart Assistant Sync & Live Combo Tester -->
+    <section class="card">
+      <div class="rule-row">
+        <div>
+          <h2>Smart Assistant Sync (Gmail + Calendar + WhatsApp)</h2>
+          <p class="subtitle">When enabled, AI replies can read your connected Google Calendar &amp; Gmail automatically.</p>
+        </div>
+        <label class="switch">
+          <input id="smartSyncToggle" type="checkbox" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <form id="assistantForm" class="assistant-row">
+        <input id="assistantInput" type="text" placeholder="Ask AI (e.g. আমার পরের মিটিং কবে? / inbox summarize করো)" required />
+        <button id="assistantSendBtn" type="submit" class="btn-secondary">Ask AI</button>
+      </form>
+      <pre id="assistantOutput" class="assistant-output" hidden></pre>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

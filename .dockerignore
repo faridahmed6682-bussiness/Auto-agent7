@@ -1,0 +1,14 @@
+.git
+.gradle
+gradle
+app
+build
+*/build
+*.apk
+*.aab
+*.keystore
+*.jar
+node_modules
+whatsapp-server/node_modules
+whatsapp-server/sessions
+whatsapp-server/data

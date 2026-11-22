@@ -1,0 +1,19 @@
+{
+  "name": "tappilot-whatsapp-baileys-server",
+  "version": "1.0.0",
+  "description": "Companion WhatsApp Pairing Code Connector & 24/7 AI Auto-Reply Server for TapPilot Agent using @whiskeysockets/baileys",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.9",
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "pino": "^9.5.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
