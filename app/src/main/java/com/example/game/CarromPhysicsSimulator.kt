@@ -126,9 +126,26 @@ object CarromPhysicsSimulator {
         }
         if (safeCandidates.isEmpty()) return null
 
-        val topCandidates = safeCandidates
-            .sortedByDescending { it.staticScore }
-            .take(14)
+        // Diversify across (targetCoin, pocketIndex) pairs first so one pocket
+        // cannot crowd out better shots into other pockets, then fill up to 22.
+        val sortedSafe = safeCandidates.sortedByDescending { it.staticScore }
+        val pickedSet = HashSet<RolloutCandidate>(24)
+        val seenPairs = HashSet<Pair<CarromPiece, Int>>(16)
+        val topCandidates = ArrayList<RolloutCandidate>(22)
+        for (c in sortedSafe) {
+            if (topCandidates.size >= 14) break
+            val pairKey = c.targetCoin to c.pocketIndex
+            if (seenPairs.add(pairKey)) {
+                pickedSet.add(c)
+                topCandidates.add(c)
+            }
+        }
+        for (c in sortedSafe) {
+            if (topCandidates.size >= 22) break
+            if (pickedSet.add(c)) {
+                topCandidates.add(c)
+            }
+        }
 
         val frictionScale = matchCalibration?.frictionScale ?: 1.0f
         val jawSafetyBuffer = matchCalibration?.pocketJawSafetyBuffer ?: 0f
@@ -138,10 +155,15 @@ object CarromPhysicsSimulator {
         var totalRollouts = 0
 
         for (candidate in topCandidates) {
+            // Hard wall-clock budget cap (110ms) once at least 1 candidate is evaluated
+            // so slower devices stay safely inside the 5s turn clock.
+            if (bestPair != null && (System.nanoTime() - startNs) > 110_000_000L) {
+                break
+            }
             val angleOffsetsDeg = if (candidate.isBreakShot) {
                 floatArrayOf(-2.0f, 0f, 2.0f)
             } else {
-                floatArrayOf(-1.4f, -0.7f, 0f, 0.7f, 1.4f)
+                floatArrayOf(-1.8f, -0.9f, 0f, 0.9f, 1.8f)
             }
             val powerFactors = if (candidate.isBankShot || candidate.isComboShot) {
                 floatArrayOf(0.88f, 0.98f, 1.08f, 1.20f)
@@ -930,7 +952,13 @@ object CarromPhysicsSimulator {
         )
     }
 
-    internal fun isBreakTrajectoryScratchFree(
+    internal data class BreakRolloutScore(
+        val scratchFree: Boolean,
+        val pottedCount: Int,
+        val weightedValue: Float
+    )
+
+    internal fun evaluateBreakRollout(
         board: CarromBoardLayout,
         pieces: List<CarromPiece>,
         strikerPos: Point2D,
@@ -939,12 +967,14 @@ object CarromPhysicsSimulator {
         myCoinColor: CoinColor,
         shotMemory: CarromMemoryData?,
         isFreestyle: Boolean
-    ): Boolean {
+    ): BreakRolloutScore {
         val frictionScale = shotMemory?.matchCalibration?.frictionScale ?: 1.0f
         val shotPowerGain = shotMemory?.matchCalibration?.shotPowerGain ?: 1.0f
         val jawSafetyBuffer = shotMemory?.matchCalibration?.pocketJawSafetyBuffer ?: 0f
         val extraScratchGuard = shotMemory?.needsExtraScratchGuard() == true
-        val jitterAngles = floatArrayOf(-1.5f, 0f, 1.5f)
+        val jitterAngles = floatArrayOf(-1.4f, 0f, 1.4f)
+        var minPotted = Int.MAX_VALUE
+        var totalWeighted = 0f
         for (ang in jitterAngles) {
             val dir = rotateVector(shotDir, ang)
             val speed = computeInitialSpeedPx(
@@ -967,9 +997,53 @@ object CarromPhysicsSimulator {
                 extraScratchGuard = extraScratchGuard,
                 isFreestyle = isFreestyle
             )
-            if (outcome.strikerScratched) return false
+            if (outcome.strikerScratched) {
+                return BreakRolloutScore(scratchFree = false, pottedCount = 0, weightedValue = -1f)
+            }
+            val friendlyPots = if (isFreestyle) {
+                outcome.pottedWhiteCoins + outcome.pottedBlackCoins + (if (outcome.pottedQueen) 1 else 0)
+            } else {
+                outcome.pottedMyCoins + (if (outcome.pottedQueen) 1 else 0)
+            }
+            if (!isFreestyle && outcome.pottedOpponentCoins > 0 && friendlyPots == 0) {
+                return BreakRolloutScore(scratchFree = false, pottedCount = 0, weightedValue = -0.5f)
+            }
+            if (friendlyPots < minPotted) minPotted = friendlyPots
+            totalWeighted += if (isFreestyle) {
+                (if (outcome.pottedQueen) 0.50f else 0f) +
+                    outcome.pottedWhiteCoins * 0.22f +
+                    outcome.pottedBlackCoins * 0.12f
+            } else {
+                outcome.pottedMyCoins * 0.25f + (if (outcome.pottedQueen) 0.30f else 0f)
+            }
         }
-        return true
+        return BreakRolloutScore(
+            scratchFree = true,
+            pottedCount = if (minPotted == Int.MAX_VALUE) 0 else minPotted,
+            weightedValue = totalWeighted / jitterAngles.size
+        )
+    }
+
+    internal fun isBreakTrajectoryScratchFree(
+        board: CarromBoardLayout,
+        pieces: List<CarromPiece>,
+        strikerPos: Point2D,
+        shotDir: Point2D,
+        pullMultiplier: Float,
+        myCoinColor: CoinColor,
+        shotMemory: CarromMemoryData?,
+        isFreestyle: Boolean
+    ): Boolean {
+        return evaluateBreakRollout(
+            board = board,
+            pieces = pieces,
+            strikerPos = strikerPos,
+            shotDir = shotDir,
+            pullMultiplier = pullMultiplier,
+            myCoinColor = myCoinColor,
+            shotMemory = shotMemory,
+            isFreestyle = isFreestyle
+        ).scratchFree
     }
 
     private fun rotateVector(v: Point2D, angleDeg: Float): Point2D {

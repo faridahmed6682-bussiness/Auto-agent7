@@ -415,7 +415,7 @@ data class AgentSettings(
     // idle (launcher / settings screen) so the learned sure-shot table is
     // ready before the next match. Shots per sweep (direct + bank + combo).
     val carromSelfPlayEnabled: Boolean = false,
-    val carromSelfPlayShots: Int = 120,
+    val carromSelfPlayShots: Int = 240,
     val usePhysicsRollout: Boolean = true,
     val useSubPixelCircleRefinement: Boolean = true,
     val useClosedLoopSliderVerify: Boolean = true,

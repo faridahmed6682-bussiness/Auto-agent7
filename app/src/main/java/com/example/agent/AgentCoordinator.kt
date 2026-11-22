@@ -2370,15 +2370,15 @@ object AgentCoordinator {
             (shootEndX - shootStartX).toDouble(),
             (shootEndY - shootStartY).toDouble()
         ).toFloat()
-        val baseDurationMs = (360L + (pullDistPx * 0.45f).toLong()).coerceIn(370L, 520L)
-        // Human-like timing: vary the pull duration slightly so
-        // every shot does not take exactly the same time.
-        val humanJitterMs = Random.Default.nextLong(-45L, 46L)
+        val baseDurationMs = (410L + (pullDistPx * 0.48f).toLong()).coerceIn(420L, 580L)
+        // Human-like timing: vary the pull duration slightly while keeping end-of-pull
+        // frame spacing smooth so the game's aim ring locks squarely before finger-up.
+        val humanJitterMs = Random.Default.nextLong(-35L, 36L)
         val shotDurationMs = (when (state.consecutiveUnregisteredCarromShots) {
-            1 -> (baseDurationMs + 60L).coerceAtMost(580L)
-            2 -> (baseDurationMs + 100L).coerceAtMost(620L)
+            1 -> (baseDurationMs + 55L).coerceAtMost(640L)
+            2 -> (baseDurationMs + 95L).coerceAtMost(680L)
             else -> baseDurationMs
-        } + humanJitterMs).coerceIn(340L, 640L)
+        } + humanJitterMs).coerceIn(390L, 680L)
         val shotAction: PlannedAction = if (!probe.deadlineFire && finalSol.isSafetyShot && state.carromTurnMemory.canAffordToWaitForSureShot(nowCarromMs)) {
             // 5s rule (Fix 2): a safety shot is only
             // the DEADLINE fallback. Before the 4.5s

@@ -156,7 +156,8 @@ object CarromGeometrySolver {
         board: CarromBoardLayout,
         coin: CarromPiece,
         pocketIndex: Int,
-        isFreestyle: Boolean
+        isFreestyle: Boolean,
+        hasOpenCoverCoin: Boolean = true
     ): Float {
         val plan = planPocketForCoinPosition(board, coin.center)
         val zoneBonus = when (pocketIndex) {
@@ -172,7 +173,11 @@ object CarromGeometrySolver {
                 CoinColor.STRIKER -> 0f
             }
         } else {
-            if (coin.color == CoinColor.QUEEN) 0.09f else 0f
+            if (coin.color == CoinColor.QUEEN) {
+                if (hasOpenCoverCoin) 0.11f else -0.08f
+            } else {
+                0f
+            }
         }
         return zoneBonus + freestyleValueBonus
     }
@@ -224,6 +229,19 @@ object CarromGeometrySolver {
             canRepositionStriker = canRepositionStriker
         )
         if (strikerCandidates.isEmpty()) return null
+
+        // In Disc Pool, avoid potting Queen if no friendly coin has a clear pocket line for immediate cover.
+        val hasOpenCoverCoin = isFreestyle || queenPendingCover || obstacles.any { myCoin ->
+            myCoin.color == myCoinColor && board.pockets.any { pk ->
+                isSegmentClear(
+                    start = myCoin.center,
+                    end = pk,
+                    obstacles = obstacles,
+                    excluded = myCoin,
+                    clearanceRadius = board.coinRadiusPx * 1.85f
+                )
+            }
+        }
 
         // 5s sure-shot / no-foul rule: the scratch guard ALWAYS runs with
         // its wide safety margins (1.48x follow-through / 1.34x deflection),
@@ -367,7 +385,7 @@ object CarromGeometrySolver {
                     }
 
                     val hangerBonus = if (isHanger) 0.16f else 0f
-                    val planAndValueBonus = pocketPlanBonus(board, coin, pocketIdx, isFreestyle)
+                    val planAndValueBonus = pocketPlanBonus(board, coin, pocketIdx, isFreestyle, hasOpenCoverCoin)
                     // Queen cover is urgent: an uncovered queen returns to the
                     // board, so a cover pot is worth much more than a normal pot.
                     val coverBonus = if (queenPendingCover && coin.color == myCoinColor) 0.22f else 0f
@@ -1791,10 +1809,28 @@ object CarromGeometrySolver {
         var bestScore = Float.NEGATIVE_INFINITY
         val extraScratchGuard = shotMemory?.needsExtraScratchGuard() == true
 
-        for (strikerPos in strikerCandidates) {
+        val breakAngleOffsets = if (obstacles.size >= 14) {
+            floatArrayOf(-14f, -7f, 0f, 7f, 14f)
+        } else {
+            floatArrayOf(-7f, 0f, 7f)
+        }
+        val breakPull = if (obstacles.size >= 14) 1.28f else 1.24f
+        val strikerPool = if (strikerCandidates.size > 7) {
+            listOf(
+                strikerCandidates.first(),
+                strikerCandidates[strikerCandidates.size / 4],
+                strikerCandidates[strikerCandidates.size / 2],
+                strikerCandidates[(strikerCandidates.size * 3) / 4],
+                strikerCandidates.last()
+            ).distinct()
+        } else {
+            strikerCandidates
+        }
+
+        for (strikerPos in strikerPool) {
             val toCoin = anchorCoin.center - strikerPos
             if (toCoin.length() < board.strikerRadiusPx * 1.5f) continue
-            val dir = toCoin.normalized()
+            val baseDir = toCoin.normalized()
 
             val clearPath = isSegmentClear(
                 start = strikerPos,
@@ -1803,51 +1839,62 @@ object CarromGeometrySolver {
                 excluded = anchorCoin,
                 clearanceRadius = board.coinRadiusPx + board.strikerRadiusPx * 0.85f
             )
-            if (willStrikerScratchIntoPocket(strikerPos, anchorCoin.center, dir, dir, 0f, board, extraScratchGuard)) {
-                continue
-            }
-            if (!CarromPhysicsSimulator.isBreakTrajectoryScratchFree(
+            for (angOffsetDeg in breakAngleOffsets) {
+                val rad = angOffsetDeg * (PI / 180.0)
+                val c = cos(rad).toFloat()
+                val s = sin(rad).toFloat()
+                val dir = Point2D(baseDir.x * c - baseDir.y * s, baseDir.x * s + baseDir.y * c).normalized()
+                if (willStrikerScratchIntoPocket(strikerPos, anchorCoin.center, dir, dir, abs(angOffsetDeg), board, extraScratchGuard)) {
+                    continue
+                }
+                val eval = CarromPhysicsSimulator.evaluateBreakRollout(
                     board = board,
                     pieces = pieces,
                     strikerPos = strikerPos,
                     shotDir = dir,
-                    pullMultiplier = 1.25f,
+                    pullMultiplier = breakPull,
                     myCoinColor = myCoinColor,
                     shotMemory = shotMemory,
                     isFreestyle = isFreestyle
                 )
-            ) {
-                continue
-            }
+                if (!eval.scratchFree) continue
 
-            // Prefer unobstructed hit into cluster with verified zero-scratch physics
-            val score = (if (clearPath) 0.56f else 0.51f) - (toCoin.length() / (board.width * 4f))
-            if (score > bestScore) {
-                bestScore = score
-                val dragEnd = computeSlingshotDragEnd(
-                    strikerPos = strikerPos,
-                    shotDir = dir,
-                    totalDistance = board.width * 1.35f,
-                    boardWidth = board.width,
-                    screenWidth = screenWidth,
-                    screenHeight = screenHeight,
-                    cutAngleDeg = 0f,
-                    powerMultiplier = 1.25f
-                )
-                bestBreak = CarromShotSolution(
-                    strikerPos = strikerPos,
-                    dragEnd = dragEnd,
-                    ghostBall = anchorCoin.center,
-                    targetCoin = anchorCoin,
-                    targetPocket = nearestPocket,
-                    pocketIndex = nearestPocketIdx,
-                    cutAngleDeg = 0f,
-                    isBankShot = false,
-                    isBreakShot = true,
-                    powerStyle = CarromPowerStyle.HARD,
-                    confidenceScore = score.coerceIn(0.50f, 0.57f),
-                    reason = "Safe Break / Cluster Scatter -> ${anchorCoin.color.name} (${anchorCoin.center.x.toInt()},${anchorCoin.center.y.toInt()})"
-                )
+                val score = (if (clearPath) 0.54f else 0.50f) +
+                    eval.weightedValue +
+                    eval.pottedCount * 0.08f -
+                    abs(angOffsetDeg) * 0.002f -
+                    (toCoin.length() / (board.width * 5f))
+                if (score > bestScore) {
+                    bestScore = score
+                    val dragEnd = computeSlingshotDragEnd(
+                        strikerPos = strikerPos,
+                        shotDir = dir,
+                        totalDistance = board.width * 1.35f,
+                        boardWidth = board.width,
+                        screenWidth = screenWidth,
+                        screenHeight = screenHeight,
+                        cutAngleDeg = 0f,
+                        powerMultiplier = breakPull
+                    )
+                    bestBreak = CarromShotSolution(
+                        strikerPos = strikerPos,
+                        dragEnd = dragEnd,
+                        ghostBall = anchorCoin.center,
+                        targetCoin = anchorCoin,
+                        targetPocket = nearestPocket,
+                        pocketIndex = nearestPocketIdx,
+                        cutAngleDeg = abs(angOffsetDeg),
+                        isBankShot = false,
+                        isBreakShot = true,
+                        powerStyle = CarromPowerStyle.HARD,
+                        confidenceScore = score.coerceIn(0.50f, 0.78f),
+                        reason = if (eval.pottedCount > 0) {
+                            "Physics Break Pot (${eval.pottedCount} coin) -> ${anchorCoin.color.name}"
+                        } else {
+                            "Safe Break / Cluster Scatter -> ${anchorCoin.color.name} (${anchorCoin.center.x.toInt()},${anchorCoin.center.y.toInt()})"
+                        }
+                    )
+                }
             }
         }
 
@@ -1923,11 +1970,11 @@ object CarromGeometrySolver {
             return candidates
         }
 
-        val steps = 24
+        val steps = 30
         val stepSize = (maxX - minX) / steps
         for (i in 0..steps) {
             val pos = Point2D(minX + i * stepSize, board.baselineY)
-            if (isPositionFree(pos, obstacles, board.coinRadiusPx + board.strikerRadiusPx * 0.95f)) {
+            if (isPositionFree(pos, obstacles, board.coinRadiusPx + board.strikerRadiusPx * 1.18f)) {
                 candidates.add(pos)
             }
         }
